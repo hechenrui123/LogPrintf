@@ -7,6 +7,8 @@ LogPrintf工具为用户提供了在本地计算机上监视远程主机调试�
 
 ## 2. 程序结构框图
 
+![Framework](https://github.com/hechenrui123/LogPrintf/pic/Frame.png)
+
 ### 1. 待调试设备上嵌入LogPrintf()函数
 待调试设备每次调用LogPrintf()时，都会把打印信息通过UDP协议向服务器端发送。而且可以设置调试信息的type和level
 
