@@ -81,11 +81,226 @@ MSG |	OP
  
  MSG字段表示这段信息是普通调试信息还是控制信息。STRING字段代表的调试信息，经过服务器的处理已经包含TYPE、LEVEL和IP字段，是完整的调试信息，客户端接受后，可以直接在本地打印。
 
-#### 4.3.2	控制信息、申请返回结果
+#### 4.3.2	控制信息、申请(删除)返回结果
  
-MSG |	OP
-1B |	1B
+MSG |	OP |	RES
+:----:|:----:|:----:
+1B	| 1B |	1B
 
+#### 4.3.3 	控制信息、查询返回结果
+
+MSG |	OP |	PORT |	NUM |	TYPE0 |	LEVEL0 |	IP0 |	TYPE1 |	LEVEL1 |	IP1 |	……
+:----:|:----:|:----:|:----:|:----:|:----:|:----:|:----:|:----:|:----:|:----:
+1B |	1B |	2B |	2B |	1B |	1B |	4B |	1B |	1B |	4B |	……
+
+### 4.4 各字段具体取值
  
+OP值 |	操作
+:----:|:----:
+0x00 |	注册
+0x10 |	查询
+0x20 |	删除
+
+MSG值 |	类别
+:----:|:----:
+0 |	普通调试信息
+1 |	控制信息
+
+RES值 |	结果
+:----:|:----:
+0 |	成功
+1 |	失败
+
+LEVEL字段仅仅使用高四位，为保留后四位可以用于更精细的信息分级。
+
+LEVEL值 |	信息级别
+:----:|:----:
+0x00 |	Verbose（详细）
+0x10 |	Debug（调试）
+0x20 |	Info（通告）
+0x30 |	Warning（警告）
+0x40 |	Error（错误）
+
+TYPE值设计为每个bit位代表一种类型是因为和级别LEVEL不同，用户选择一个LEVEL就是选择了这个LEVEL之上的所有LEVEL。因为类型之间没有偏序关系，所以这样设计可以使用掩码来选择任意个数的TYPE类型。
+
+TYPE值 |	信息类型
+:----:|:----:
+0x01 |	类型0
+0x02 |	类型1
+0x04 |	类型2
+0x08 |	类型3
+0x10 |	类型4
+…… |	……
+
+## 5.	配置文件格式
  
+ 1）	服务器配置文件记录：监听端口、客户端信息保存时间
+ 2）	客户端配置文件记录：服务器IP和监听端口、客户端尝试申请的起始端口、重新注册时间、客户端监听的目标列表
+ 3）	待调试设备配置文件：服务器IP和服务器监听端口
  
+Server.ini
+|:-|
+[Server]
+;服务器启动时监听的两个端口
+Port=13013 
+LiveTime=600
+
+Client.ini
+|:-|
+[Server]
+;客户端初始化时连接服务器的地址
+ServerPort=13013 
+IP="192.168.1.12"
+[Client]
+;客户端尝试申请的起始端口号
+Port=14932
+LiveTime=500
+[Obj0]
+;客户端监听的目标IP
+IP="192.168.3.112"
+;客户端监听类型0和类型2
+TYPE=5
+;客户端监听级别2以上的所有级别
+LEVEL=2
+
+Device.ini
+|:-|
+[Server]
+;调用Logprint()时连接服务器的地址
+ServerPort=13013 
+IP="192.168.1.12"
+
+## 6.	类的详细设计
+
+### 6.1	客户端
+
+![clientclass](https://github.com/hechenrui123/LogPrintf/blob/master/pic/ClientClass.png)
+
+LogClientAgent是客户端程序的代理类，Init()负责初始化，Run()中循环处理网络事件，LogClientAgent::ProcessMessage()处理网络事件的内容，根据内容的不同类型通过FunctionManger类来处理。TimerManager::ProcessTimer()负责处理网络事件的时间。客户端只有一个定时器，定时器到时后重新向服务器端注册，然后重启定时器。
+
+### 6.2 服务器端
+
+![serverclass](https://github.com/hechenrui123/LogPrintf/blob/master/pic/ServerClass.png)
+
+LogServerAgent是服务器端程序的代理类，Init()负责初始化，Run()中循环处理网络事件，LogClientAgent::ProcessMessage()处理网络事件的内容，根据内容的不同类型分别通过FunctionManger类、DispatchFilter类来处理。TimerManager::ProcessTimer()负责处理网络事件的时间。服务器为每一个注册的客户端初始化一个定时器，定时器到时后，删除对应的客户端的注册信息，然后关闭定时器。
+
+### 6.3 设备端
+
+![deviceclass](https://github.com/hechenrui123/LogPrintf/blob/master/pic/DeviceClass.png)
+
+设备端的类LogPrintInterface功能是为用户提供函数LogPrintf()，调用时会向服务器输出调试信息。可以改变调试信息的TYPE和LEVEL。
+
+## 7.	功能测试
+
+![testframe](https://github.com/hechenrui123/LogPrintf/blob/master/pic/TestFrame.png)
+
+**1.	Server的配置为：监听端口13013，连接保持时间20s。Server只在162.105.85.235上运行。** 
+ 
+**2.	Interface(): 调试信息来源，模拟三个待调试设备device。发送五个不同级别的调试信息，每个级别各两条，来测试服务器的过滤功能。具体调试信息如下： **
+
+![interfacetest](https://github.com/hechenrui123/LogPrintf/blob/master/pic/InterfaceTest.png)
+
+**3.	Client0: 收听所有IP，所有TYPE、所有LEVEL的信息 **
+ 
+**4.	Client1: 收听所有IP，TYPE=0x01或者TYPE=0x10、所有LEVEL的信息 **
+ 
+**5.	Client2: 收听IP=162.105.85.69、所有TYPE、LEVEL>=0x30的信息 **
+
+如下是各个Client的配置文件：
+
+client0.ini
+|:-|
+[Server]
+;初始化时连接服务器的地址
+ServerPort=13013 
+IP=162.105.85.235
+[Client]
+;客户端尝试申请的端口号
+Port=14013
+LiveTime=10000
+objnum=3
+[Obj0]
+;客户端监听的目标IP
+IP=162.105.85.69
+;客户端监听所有类型
+TYPE=255
+;客户端监听所有级别
+LEVEL=0
+[Obj1]
+IP=162.105.85.118
+TYPE=255
+LEVEL=0
+[Obj2]
+IP=162.105.85.235
+TYPE=255
+LEVEL=0	
+
+client1.ini
+|:-|
+[Server]
+;初始化时连接服务器的地址
+ServerPort=13013 
+IP=162.105.85.235
+[Client]
+;客户端尝试申请的端口号
+Port=14013
+LiveTime=10000
+objnum=3
+[Obj0]
+;客户端监听的目标IP
+IP=162.105.85.69
+;客户端监听所有类型
+TYPE=17
+;客户端监听所有级别
+LEVEL=0
+[Obj1]
+IP=162.105.85.118
+TYPE=17
+LEVEL=0
+[Obj2]
+IP=162.105.85.235
+TYPE=17
+LEVEL=0	
+
+client2.ini
+|:-|
+[Server]
+;客户端初始化时连接服务器的地址
+ServerPort=13013 
+IP=162.105.85.235
+[Client]
+;客户端尝试申请的起始端口号
+Port=14013
+LiveTime=10000
+objnum=3
+[Obj0]
+;客户端监听的目标IP
+IP=162.105.85.69
+;客户端监听所有类型
+TYPE=255
+;客户端监听所有级别
+LEVEL=48
+
+**测试结果：**
+
+1. Client0输出：
+
+从输出中可以看出，client0不加过滤地接收了来自所有device的所有调试信息。
+
+![clienttest00](https://github.com/hechenrui123/LogPrintf/blob/master/pic/ClientTest00.png)
+![clienttest01](https://github.com/hechenrui123/LogPrintf/blob/master/pic/ClientTest01.png)
+
+2.	Client1输出：
+
+可以看出Client1接收了所有IP的、TYPE=0x01和0x10的调试信息。
+
+![clienttest10](https://github.com/hechenrui123/LogPrintf/blob/master/pic/ClientTest10.png)
+![clienttest11](https://github.com/hechenrui123/LogPrintf/blob/master/pic/ClientTest11.png)
+
+3.	Client2输出：
+
+Client2接收到了来自IP=162.105.85.69的、LEVEL=0x30、0x40、0x50的调试信息。
+
+![clienttest2](https://github.com/hechenrui123/LogPrintf/blob/master/pic/ClientTest2.png)
+
+
